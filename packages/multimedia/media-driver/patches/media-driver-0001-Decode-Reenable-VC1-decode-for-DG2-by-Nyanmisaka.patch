@@ -1,0 +1,115 @@
+From 75f015436d1caccf015369fe1f8b3d5994b2481c Mon Sep 17 00:00:00 2001
+From: Alex Mitzsch <43502191+mitzsch@users.noreply.github.com>
+Date: Sat, 24 Jan 2026 20:13:34 +0100
+Subject: [PATCH] [Decode] Reenable VC1 decode for DG2 by Nyanmisaka
+
+https://github.com/intel/media-driver/pull/1846
+
+Work done by Nyanmisaka
+---
+ media_driver/linux/Xe_M/ddi/media_sku_wa_xe.cpp      |  2 +-
+ .../media_interfaces_dg2/media_interfaces_dg2.cpp    | 11 ++++++++---
+ .../media_interfaces_dg2/media_interfaces_dg2.h      | 12 +++++++++---
+ 3 files changed, 18 insertions(+), 7 deletions(-)
+
+diff --git a/media_driver/linux/Xe_M/ddi/media_sku_wa_xe.cpp b/media_driver/linux/Xe_M/ddi/media_sku_wa_xe.cpp
+index bc61d08f0..fa27706de 100644
+--- a/media_driver/linux/Xe_M/ddi/media_sku_wa_xe.cpp
++++ b/media_driver/linux/Xe_M/ddi/media_sku_wa_xe.cpp
+@@ -80,7 +80,7 @@ static struct LinuxCodecInfo Dg2CodecInfo =
+     .avcDecoding    = 1,
+     .mpeg2Decoding  = 1,
+     .vp8Decoding    = 0,
+-    .vc1Decoding    = 0,
++    .vc1Decoding    = SET_STATUS_BY_FULL_OPEN_SOURCE(1, 0),
+     .jpegDecoding   = 1,
+     .avcEncoding    = 0,
+     .mpeg2Encoding  = 0,
+diff --git a/media_driver/media_interface/media_interfaces_dg2/media_interfaces_dg2.cpp b/media_driver/media_interface/media_interfaces_dg2/media_interfaces_dg2.cpp
+index 6e3279036..4eaf0b0d9 100644
+--- a/media_driver/media_interface/media_interfaces_dg2/media_interfaces_dg2.cpp
++++ b/media_driver/media_interface/media_interfaces_dg2/media_interfaces_dg2.cpp
+@@ -187,6 +187,7 @@ static bool dg2RegisteredMhw =
+ #define PLATFORM_INTEL_DG2    22
+ #define GENX_XEHP              11
+ #define GENX_DG2              13
++#define GENX_TGLLP            12
+ 
+ MOS_STATUS MhwInterfacesDg2::Initialize(
+     CreateParams params,
+@@ -919,7 +920,6 @@ MOS_STATUS CodechalInterfacesNextXe_Hpm::Initialize(
+     return MOS_STATUS_SUCCESS;
+ }
+ 
+-#ifdef _MEDIA_RESERVED
+ static bool dg2RegisteredCMHal =
+     MediaFactory<uint32_t, CMHalDevice>::
+     Register<CMHalInterfacesXe_Hpm>((uint32_t)IGFX_DG2);
+@@ -936,12 +936,18 @@ MOS_STATUS CMHalInterfacesXe_Hpm::Initialize(CM_HAL_STATE *pCmState)
+         MHW_ASSERTMESSAGE("Create CM Hal interfaces failed.")
+         return MOS_STATUS_NO_SPACE;
+     }
++#ifdef _MEDIA_RESERVED
+     device->SetCopyKernelIsa((void*)pGPUCopy_kernel_isa_dg2, iGPUCopy_kernel_isa_size_dg2);
+     device->SetInitKernelIsa((void*)pGPUInit_kernel_isa_dg2, iGPUInit_kernel_isa_size_dg2);
++#endif
+ 
+     m_cmhalDevice = device;
+     m_cmhalDevice->SetGenPlatformInfo(PLATFORM_INTEL_DG2, PLATFORM_INTEL_GT2, "DG2");
+-    uint32_t cisaIDs[] = { GENX_DG2 , GENX_XEHP };
++#ifdef _MEDIA_RESVERED
++    uint32_t cisaIDs[] = { GENX_DG2, GENX_XEHP };
++#else
++    uint32_t cisaIDs[] = { GENX_TGLLP, GENX_DG2, GENX_XEHP };
++#endif
+     m_cmhalDevice->AddSupportedCisaIDs(cisaIDs, sizeof(cisaIDs)/sizeof(uint32_t));
+ 
+     if (pCmState->skuTable && MEDIA_IS_SKU(pCmState->skuTable, FtrCCSNode))
+@@ -954,7 +960,6 @@ MOS_STATUS CMHalInterfacesXe_Hpm::Initialize(CM_HAL_STATE *pCmState)
+     m_cmhalDevice->m_l3ConfigCount = DG2_L3_CONFIG_COUNT;
+     return MOS_STATUS_SUCCESS;
+ }
+-#endif
+ 
+ static bool dg2RegisteredRenderHal =
+     MediaFactory<uint32_t, RenderHalDevice>::
+diff --git a/media_driver/media_interface/media_interfaces_dg2/media_interfaces_dg2.h b/media_driver/media_interface/media_interfaces_dg2/media_interfaces_dg2.h
+index f4ec40f75..ae8f4f6ae 100644
+--- a/media_driver/media_interface/media_interfaces_dg2/media_interfaces_dg2.h
++++ b/media_driver/media_interface/media_interfaces_dg2/media_interfaces_dg2.h
+@@ -134,7 +134,11 @@
+ 
+ #include "cm_hal_xe_xpm.h"
+ 
+-#endif // _MEDIA_RESERVED
++#else // _MEDIA_RESERVED
++
++#include "cm_hal_g12.h"
++
++#endif // !_MEDIA_RESERVED
+ 
+ #include "vphal_xe_xpm.h"
+ #include "vphal_xe_hpm.h"
+@@ -353,15 +357,17 @@ static const L3ConfigRegisterValues DG2_L3_PLANES[DG2_L3_CONFIG_COUNT] =
+     {0x80000000, 0x70000080, 0, 0},  //  256   0    0    224  32  512
+ };
+ 
+-#ifdef _MEDIA_RESERVED
+ class CMHalInterfacesXe_Hpm : public CMHalDevice
+ {
+ protected:
++#ifdef _MEDIA_RESERVED
+     using CMHal = CmHalXe_Xpm;
++#else
++    using CMHal = CM_HAL_G12_X;
++#endif
+     MOS_STATUS Initialize(
+         CM_HAL_STATE *pCmState);
+ };
+-#endif
+ 
+ class VphalInterfacesXe_Hpm : public VphalDevice
+ {
+-- 
+2.46.0.windows.1
+
