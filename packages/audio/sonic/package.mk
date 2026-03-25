@@ -2,8 +2,8 @@
 # Copyright (C) 2026-present Team LibreELEC (https://libreelec.tv)
 
 PKG_NAME="sonic"
-PKG_VERSION="d2cdb40fbdc82b464be364a50b34e8dd82b6c80a"
-PKG_SHA256="fadf47936df0e1030fe159609d136c095ce3c77bbae19a9f525e26b2de6a8229"
+PKG_VERSION="b93885dcb70aae50c6f76b0fe4e0868f029a077e"
+PKG_SHA256="b76d832649306b53e716c271014c0b8f89f6bcefc43e5068a2eca3cf1946324c"
 PKG_LICENSE="Apache-2.0"
 PKG_SITE="https://github.com/waywardgeek/sonic"
 PKG_URL="https://github.com/waywardgeek/sonic/archive/${PKG_VERSION}.tar.gz"
@@ -17,7 +17,6 @@ pre_build_host() {
 }
 
 configure_host() {
-  PKG_MAKE_OPTS_HOST="CC=${HOST_CC}"
   cd ${PKG_BUILD}/.${HOST_NAME}
 }
 
@@ -38,7 +37,6 @@ pre_build_target() {
 }
 
 configure_target() {
-  PKG_MAKE_OPTS_TARGET="CC=${CC}"
   cd ${PKG_BUILD}/.${TARGET_NAME}
 }
 
