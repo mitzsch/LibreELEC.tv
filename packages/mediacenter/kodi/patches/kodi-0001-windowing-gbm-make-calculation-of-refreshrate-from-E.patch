@@ -1,30 +1,15 @@
-From 8d39744a0c746351f8c6ea744b1c4324d2aa40fa Mon Sep 17 00:00:00 2001
-From: Alex Mitzsch <43502191+mitzsch@users.noreply.github.com>
-Date: Sat, 28 Mar 2026 11:33:24 +0100
-Subject: [PATCH] windowing/gbm: make calculation of refreshrate from EDID more
- robust
-
-Check htotal and vtotal > 0 before calculating refresh rate; in the unlikely event of a 0, it returns a refresh rate of 0
----
- xbmc/windowing/gbm/drm/DRMUtils.cpp | 5 ++++-
- 1 file changed, 4 insertions(+), 1 deletion(-)
-
 diff --git a/xbmc/windowing/gbm/drm/DRMUtils.cpp b/xbmc/windowing/gbm/drm/DRMUtils.cpp
-index df4f285edd..4842ccfd00 100644
+index df2f397b2a..aec21b299b 100644
 --- a/xbmc/windowing/gbm/drm/DRMUtils.cpp
 +++ b/xbmc/windowing/gbm/drm/DRMUtils.cpp
-@@ -638,7 +638,10 @@ RESOLUTION_INFO CDRMUtils::GetResolutionInfo(drmModeModeInfoPtr mode)
+@@ -638,8 +638,8 @@ RESOLUTION_INFO CDRMUtils::GetResolutionInfo(drmModeModeInfoPtr mode)
      }
    }
  
--  res.fRefreshRate = (mode->clock * 1000.0f) / (mode->htotal * mode->vtotal);
+-  if (mode->clock % 5 != 0)
+-    res.fRefreshRate = static_cast<float>(mode->vrefresh) * (1000.0f / 1001.0f);
 +  if (mode->htotal > 0 && mode->vtotal > 0)
 +    res.fRefreshRate = (mode->clock * 1000.0f) / (mode->htotal * mode->vtotal);
-+  else
-+    res.fRefreshRate = 0.0f;
+   else
+     res.fRefreshRate = mode->vrefresh;
    res.iSubtitles = res.iHeight;
-   res.fPixelRatio = 1.0f;
-   res.bFullScreen = true;
--- 
-2.46.0.windows.1
-
