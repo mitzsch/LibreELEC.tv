@@ -19,6 +19,7 @@ PKG_BUILD_FLAGS="-sysroot"
 
 PKG_IS_ADDON="yes"
 PKG_ADDON_NAME="HyperHDR"
+PKG_ADDON_ICON_NAME="HyperHDR"
 PKG_ADDON_TYPE="xbmc.service"
 
 if [ "${PROJECT}" = "ARM" -o "${PROJECT}" = "RPi" ]; then
@@ -59,7 +60,6 @@ pre_configure_target() {
   cp -a $(get_build_dir hyperhdr-qmqtt)/* ${PKG_BUILD}/external/qmqtt
   cp -a $(get_build_dir hyperhdr-sdbus-cpp)/* ${PKG_BUILD}/external/sdbus-cpp
 }
-
 
 addon() {
   mkdir -p ${ADDON_BUILD}/${PKG_ADDON_ID}/bin

@@ -2,10 +2,10 @@
 # Copyright (C) 2016-present Team LibreELEC (https://libreelec.tv)
 
 PKG_NAME="tvheadend43"
-PKG_VERSION="eb023c5733f78c2d87cd00fe6265cbf17048b1d3"
-PKG_SHA256="6a8a269d8f427e2f3d8608201b4e77f2ac9fc56632ebffc323bb3ac873486560"
-PKG_VERSION_NUMBER="4.3-2634"
-PKG_REV="2"
+PKG_VERSION="e29336581eaece7370b12080834e8abab21ebf22"
+PKG_SHA256="67b01989b8b8e171830e97bc709e7f9090b71c41cd1964aaf6da9e8f27c653dd"
+PKG_VERSION_NUMBER="4.3-2657"
+PKG_REV="1"
 PKG_ARCH="any"
 PKG_LICENSE="GPL"
 PKG_SITE="http://www.tvheadend.org"
@@ -20,6 +20,7 @@ PKG_BUILD_FLAGS="-sysroot"
 
 PKG_IS_ADDON="yes"
 PKG_ADDON_NAME="Tvheadend Server 4.3"
+PKG_ADDON_ICON_NAME="Tvheadend"
 PKG_ADDON_TYPE="xbmc.service"
 
 # basic transcoding options

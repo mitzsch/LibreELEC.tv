@@ -3,8 +3,8 @@
 # Copyright (C) 2017-present Team LibreELEC (https://libreelec.tv)
 
 PKG_NAME="kodi"
-PKG_VERSION="c23cbf3705b58a47b93070836be1f856ba0fac16"
-PKG_SHA256="2efae5602ad03957dd32c50c6e941bfdb15f0081ea380e84343bff10286f2326"
+PKG_VERSION="27c627cf95d11c4196f1f698dcc63a9a43710886"
+PKG_SHA256="6e0aeed8de713c830f756646010f92972bf9efe51032122cd0ff4c09e457705d"
 PKG_LICENSE="GPL"
 PKG_SITE="http://www.kodi.tv"
 PKG_URL="https://github.com/xbmc/xbmc/archive/${PKG_VERSION}.tar.gz"
@@ -13,6 +13,10 @@ PKG_DEPENDS_UNPACK="commons-lang3 commons-text groovy"
 PKG_DEPENDS_HOST="toolchain"
 PKG_LONGDESC="A free and open source cross-platform media player."
 PKG_BUILD_FLAGS="+speed"
+
+if [ "${TARGET_ARCH}" = "arm" ]; then
+  PKG_BUILD_FLAGS+=" -gold"
+fi
 
 configure_package() {
   # Single threaded LTO is very slow so rely on Kodi for parallel LTO support
@@ -59,6 +63,7 @@ configure_package() {
                    -DWAYLANDPP_SCANNER=${TOOLCHAIN}/bin/wayland-scanner++ \
                    -DWAYLANDPP_PROTOCOLS_DIR=${SYSROOT_PREFIX}/usr/share/waylandpp/protocols"
   else # GBM
+    PKG_PATCH_DIRS+=" reardonia" # temp for testing
     if [ ! "${KODIPLAYER_DRIVER}" = "default" ]; then
       PKG_DEPENDS_TARGET+=" ${KODIPLAYER_DRIVER}"
     fi
@@ -313,6 +318,9 @@ makeinstall_host() {
 
 pre_configure_target() {
   export LIBS="${LIBS} -lncurses"
+  if [ "${TARGET_ARCH}" = "arm" ]; then
+    LDFLAGS+=" -Wl,--allow-shlib-undefined"
+  fi
 }
 
 post_makeinstall_target() {

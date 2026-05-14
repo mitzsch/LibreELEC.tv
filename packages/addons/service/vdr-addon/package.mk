@@ -5,7 +5,7 @@
 
 PKG_NAME="vdr-addon"
 PKG_VERSION="2.8.1"
-PKG_REV="1"
+PKG_REV="0"
 PKG_ARCH="any"
 PKG_LICENSE="GPL"
 PKG_SITE="https://libreelec.tv"
@@ -21,6 +21,9 @@ PKG_TOOLCHAIN="manual"
 PKG_IS_ADDON="yes"
 PKG_ADDON_NAME="VDR PVR Backend"
 PKG_ADDON_TYPE="xbmc.service"
+PKG_ADDON_ICON_NAME="none"
+PKG_ADDON_ICON_SIZE="320"
+PKG_ADDON_ICON_OFFSET='0'
 PKG_ADDON_REQUIRES="pvr.vdr.vnsi:0.0.0 script.config.vdr:0.0.0"
 
 addon() {

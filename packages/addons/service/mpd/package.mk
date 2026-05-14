@@ -3,9 +3,9 @@
 # Copyright (C) 2016-present Team LibreELEC (https://libreelec.tv)
 
 PKG_NAME="mpd"
-PKG_VERSION="0.24.9"
-PKG_SHA256="f3d28b29bbe675970ef205b3d9b835e5691423fed6a89d713dbcbf7839ea92f3"
-PKG_REV="3"
+PKG_VERSION="0.24.10"
+PKG_SHA256="867f10fd83cde20c240617222b38fbf6885f902015d0da424a28fbafc675e1dd"
+PKG_REV="1"
 PKG_ARCH="any"
 PKG_LICENSE="GPL"
 PKG_SITE="https://www.musicpd.org"
@@ -20,6 +20,8 @@ PKG_BUILD_FLAGS="-sysroot"
 
 PKG_IS_ADDON="yes"
 PKG_ADDON_NAME="Music Player Daemon (MPD)"
+PKG_ADDON_ICON_NAME="MPD"
+PKG_ADDON_ICON_SIZE="270"
 PKG_ADDON_TYPE="xbmc.service"
 
 PKG_MESON_OPTS_TARGET="-Dadplug=disabled \
