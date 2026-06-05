@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-2.0
+# SPDX-License-Identifier: GPL-2.0-only
 # Copyright (C) 2021-present Team LibreELEC (https://libreelec.tv)
 
 PKG_NAME="exfatprogs"
@@ -10,6 +10,10 @@ PKG_URL="https://github.com/exfatprogs/exfatprogs/releases/download/${PKG_VERSIO
 PKG_DEPENDS_TARGET="toolchain util-linux"
 PKG_LONGDESC="userspace utilities that contain all of the standard utilities for creating and fixing and debugging exfat filesystems."
 PKG_TOOLCHAIN="autotools"
+
+post_configure_target() {
+  libtool_remove_rpath libtool
+}
 
 post_makeinstall_target() {
   rm -rf ${INSTALL}/usr/share
