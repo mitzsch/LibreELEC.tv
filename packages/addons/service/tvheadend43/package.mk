@@ -5,7 +5,7 @@ PKG_NAME="tvheadend43"
 PKG_VERSION="a72efda9b20a12334c312915164bdf83985ce645"
 PKG_SHA256="aa71023ce93e600063cba5461ba5ff2532d52979cfb7be14f9c17901f51a4655"
 PKG_VERSION_NUMBER="4.3-2664"
-PKG_REV="4"
+PKG_REV="5"
 PKG_ARCH="any"
 PKG_LICENSE="GPL-3.0-or-later"
 PKG_SITE="http://www.tvheadend.org"
@@ -126,7 +126,7 @@ addon() {
 
   if [ "${TARGET_ARCH}" = "aarch64" ] || [ "${TARGET_ARCH}" = "x86_64" ]; then
     mkdir -p ${ADDON_BUILD}/${PKG_ADDON_ID}/lib.private
-    cp -P $(get_install_dir x265)/usr/lib/libx265.so.215 ${ADDON_BUILD}/${PKG_ADDON_ID}/lib.private
+    cp -P $(get_install_dir x265)/usr/lib/libx265.so.$(get_pkg_variable x265 PKG_X265_SONAME) ${ADDON_BUILD}/${PKG_ADDON_ID}/lib.private
     patchelf --add-rpath '${ORIGIN}/../lib.private' ${ADDON_BUILD}/${PKG_ADDON_ID}/bin/{comskip,tvheadend}
   fi
 
