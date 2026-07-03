@@ -65,6 +65,9 @@ post_makeinstall_target() {
     echo "[General]" >${INSTALL}/etc/bluetooth/input.conf
     echo "ClassicBondedOnly=false" >>${INSTALL}/etc/bluetooth/input.conf
 
+  mkdir -p ${INSTALL}/usr/bin
+    cp ${PKG_BUILD}/tools/btmgmt ${INSTALL}/usr/bin
+
   mkdir -p ${INSTALL}/usr/share/services
     cp -P ${PKG_DIR}/default.d/*.conf ${INSTALL}/usr/share/services
 
