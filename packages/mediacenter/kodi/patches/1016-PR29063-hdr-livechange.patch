@@ -1,0 +1,442 @@
+From cfeffe24d9a13e96ecbf6e874a299f8fa7692446 Mon Sep 17 00:00:00 2001
+From: smp79 <sergey79@gmail.com>
+Date: Fri, 28 Aug 2026 03:45:30 +0300
+Subject: [PATCH] GLES/GBM: push updated MaxCLL/MaxFALL live
+
+---
+ .../DVDCodecs/Video/DVDVideoCodec.cpp         |  12 ++
+ .../DVDCodecs/Video/DVDVideoCodec.h           |   1 +
+ .../VideoPlayer/VideoRenderers/BaseRenderer.h |   1 +
+ .../VideoRenderers/LinuxRendererGLES.cpp      |  17 ++
+ .../VideoRenderers/LinuxRendererGLES.h        |   1 +
+ .../VideoRenderers/RenderManager.cpp          |   8 +
+ xbmc/windowing/WinSystem.h                    |   2 +
+ xbmc/windowing/gbm/WinSystemGbm.cpp           | 192 +++++++++++-------
+ xbmc/windowing/gbm/WinSystemGbm.h             |   6 +-
+ xbmc/windowing/gbm/drm/DRMAtomic.cpp          |   5 +
+ xbmc/windowing/gbm/drm/DRMAtomic.h            |   3 +
+ 11 files changed, 177 insertions(+), 71 deletions(-)
+
+diff --git a/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodec.cpp b/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodec.cpp
+index 6e5836d82dd1a..7fdf5e785e3e8 100644
+--- a/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodec.cpp
++++ b/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodec.cpp
+@@ -103,3 +103,15 @@ bool VideoPicture::IsSameParams(const VideoPicture& pic) const
+          this->color_transfer == pic.color_transfer && this->hdrType == pic.hdrType &&
+          CompareDisplayMetadata(pic);
+ }
++
++bool VideoPicture::CompareLightMetadata(const VideoPicture& pic) const
++{
++  if (this->hasLightMetadata != pic.hasLightMetadata)
++    return false;
++
++  if (!pic.hasLightMetadata)
++    return true;
++
++  return this->lightMetadata.MaxCLL == pic.lightMetadata.MaxCLL &&
++         this->lightMetadata.MaxFALL == pic.lightMetadata.MaxFALL;
++}
+diff --git a/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodec.h b/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodec.h
+index d58b3fc8814e8..fc49a5db09ea5 100644
+--- a/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodec.h
++++ b/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodec.h
+@@ -42,6 +42,7 @@ struct VideoPicture
+   VideoPicture& SetParams(const VideoPicture &pic);
+   void Reset(); // reinitialize members, videoBuffer will be released if set!
+   bool IsSameParams(const VideoPicture& pic) const;
++  bool CompareLightMetadata(const VideoPicture& pic) const;
+ 
+   CVideoBuffer *videoBuffer = nullptr;
+ 
+diff --git a/xbmc/cores/VideoPlayer/VideoRenderers/BaseRenderer.h b/xbmc/cores/VideoPlayer/VideoRenderers/BaseRenderer.h
+index 4efda665063b3..f6c7f7222c143 100644
+--- a/xbmc/cores/VideoPlayer/VideoRenderers/BaseRenderer.h
++++ b/xbmc/cores/VideoPlayer/VideoRenderers/BaseRenderer.h
+@@ -66,6 +66,7 @@ class CBaseRenderer
+   virtual void SetBufferSize(int numBuffers) { }
+   virtual void ReleaseBuffer(int idx) { }
+   virtual bool NeedBuffer(int idx) { return false; }
++  virtual void UpdateLightMetadata(const VideoPicture& picture) {}
+   virtual bool IsGuiLayer() { return true; }
+   //! True when video never reaches the framebuffer: a DRM plane, an Android
+   //! SurfaceView, the Amlogic video layer. Such a renderer must produce its
+diff --git a/xbmc/cores/VideoPlayer/VideoRenderers/LinuxRendererGLES.cpp b/xbmc/cores/VideoPlayer/VideoRenderers/LinuxRendererGLES.cpp
+index 7b519e4ad7333..c4f226371e0e4 100644
+--- a/xbmc/cores/VideoPlayer/VideoRenderers/LinuxRendererGLES.cpp
++++ b/xbmc/cores/VideoPlayer/VideoRenderers/LinuxRendererGLES.cpp
+@@ -266,6 +266,23 @@ void CLinuxRendererGLES::AddVideoPicture(const VideoPicture &picture, int index)
+   }
+ }
+ 
++void CLinuxRendererGLES::UpdateLightMetadata(const VideoPicture& picture)
++{
++  for (auto& buf : m_buffers)
++  {
++    if (!buf.videoBuffer)
++      continue;
++
++    buf.hasLightMetadata = picture.hasLightMetadata && picture.lightMetadata.MaxCLL != 0;
++    buf.lightMetadata = picture.lightMetadata;
++  }
++
++  // In passthrough, the display consumes MaxCLL/MaxFALL via HDR_OUTPUT_METADATA,
++  // not the tone-map shader above - push it there too, without a reconfigure.
++  if (m_passthroughHDR)
++    CServiceBroker::GetWinSystem()->RefreshHDRLightMetadata(&picture);
++}
++
+ void CLinuxRendererGLES::ReleaseBuffer(int idx)
+ {
+   CPictureBuffer &buf = m_buffers[idx];
+diff --git a/xbmc/cores/VideoPlayer/VideoRenderers/LinuxRendererGLES.h b/xbmc/cores/VideoPlayer/VideoRenderers/LinuxRendererGLES.h
+index 8f594446da81f..28866da42afaf 100644
+--- a/xbmc/cores/VideoPlayer/VideoRenderers/LinuxRendererGLES.h
++++ b/xbmc/cores/VideoPlayer/VideoRenderers/LinuxRendererGLES.h
+@@ -68,6 +68,7 @@ class CLinuxRendererGLES : public CBaseRenderer
+   bool Configure(const VideoPicture& picture, float fps, unsigned int orientation) override;
+   bool IsConfigured() override { return m_bConfigured; }
+   void AddVideoPicture(const VideoPicture& picture, int index) override;
++  void UpdateLightMetadata(const VideoPicture& picture) override;
+   void UnInit() override;
+   bool Flush(bool saveBuffers) override;
+   void SetBufferSize(int numBuffers) override { m_NumYUVBuffers = numBuffers; }
+diff --git a/xbmc/cores/VideoPlayer/VideoRenderers/RenderManager.cpp b/xbmc/cores/VideoPlayer/VideoRenderers/RenderManager.cpp
+index 1de1dedb49480..2ebab714b1c12 100644
+--- a/xbmc/cores/VideoPlayer/VideoRenderers/RenderManager.cpp
++++ b/xbmc/cores/VideoPlayer/VideoRenderers/RenderManager.cpp
+@@ -99,6 +99,14 @@ bool CRenderManager::Configure(const VideoPicture& picture, float fps, unsigned
+     if (m_pRenderer != nullptr && m_picture.IsSameParams(picture) && m_orientation == orientation &&
+         m_NumberBuffers == buffers && !m_pRenderer->ConfigChanged(picture))
+     {
++      // check if HDR light metadata changes during playback
++      if (!m_picture.CompareLightMetadata(picture))
++      {
++        CLog::Log(LOGDEBUG, "CRenderManager::Configure - HDR light metadata has changed");
++        m_picture.SetParams(picture);
++        m_pRenderer->UpdateLightMetadata(picture);
++      }
++
+       if (m_fps != fps)
+       {
+         CLog::Log(LOGDEBUG, "CRenderManager::Configure - framerate changed from {:4.2f} to {:4.2f}",
+diff --git a/xbmc/windowing/WinSystem.h b/xbmc/windowing/WinSystem.h
+index 477632da46bbd..73d278b97058d 100644
+--- a/xbmc/windowing/WinSystem.h
++++ b/xbmc/windowing/WinSystem.h
+@@ -244,6 +244,8 @@ class CWinSystemBase
+    *
+    */
+   virtual bool SetHDR(const VideoPicture* videoPicture) { return false; }
++  //! Update MaxCLL/MaxFALL on an already-active HDR output without a full SetHDR().
++  virtual bool RefreshHDRLightMetadata(const VideoPicture* videoPicture) { return false; }
+   virtual bool IsHDRDisplay() { return false; }
+   virtual HDR_STATUS ToggleHDR() { return HDR_STATUS::HDR_UNSUPPORTED; }
+   virtual HDR_STATUS GetOSHDRStatus() { return HDR_STATUS::HDR_UNSUPPORTED; }
+diff --git a/xbmc/windowing/gbm/WinSystemGbm.cpp b/xbmc/windowing/gbm/WinSystemGbm.cpp
+index 83e20858164a1..bf7dbf44185c3 100644
+--- a/xbmc/windowing/gbm/WinSystemGbm.cpp
++++ b/xbmc/windowing/gbm/WinSystemGbm.cpp
+@@ -474,6 +474,85 @@ void CWinSystemGbm::SetColorimetry(const VideoPicture* videoPicture)
+   }
+ }
+ 
++namespace
++{
++void BuildHDRMetadata(const VideoPicture& videoPicture,
++                      KODI::UTILS::Eotf eotf,
++                      hdr_output_metadata& hdr_metadata)
++{
++  hdr_metadata = {};
++  hdr_metadata.metadata_type = KODI::UTILS::HDMI_STATIC_METADATA_TYPE1;
++  hdr_metadata.hdmi_metadata_type1.eotf = static_cast<uint8_t>(eotf);
++  hdr_metadata.hdmi_metadata_type1.metadata_type = KODI::UTILS::HDMI_STATIC_METADATA_TYPE1;
++
++  if (!hdr_metadata.hdmi_metadata_type1.eotf)
++    return;
++
++  const AVMasteringDisplayMetadata* mdmd = KODI::UTILS::GetMasteringDisplayMetadata(videoPicture);
++  if (mdmd && mdmd->has_primaries)
++  {
++    // 0.00002 units; 0x0000 = 0, 0xC350 = 1.0000
++    for (int i = 0; i < 3; i++)
++    {
++      hdr_metadata.hdmi_metadata_type1.display_primaries[i].x =
++          std::round(av_q2d(mdmd->display_primaries[i][0]) * 50000.0);
++      hdr_metadata.hdmi_metadata_type1.display_primaries[i].y =
++          std::round(av_q2d(mdmd->display_primaries[i][1]) * 50000.0);
++
++      CLog::Log(LOGDEBUG, LOGVIDEO, "CWinSystemGbm::{} - display_primaries[{}].x: {}", __FUNCTION__,
++                i, hdr_metadata.hdmi_metadata_type1.display_primaries[i].x);
++      CLog::Log(LOGDEBUG, LOGVIDEO, "CWinSystemGbm::{} - display_primaries[{}].y: {}", __FUNCTION__,
++                i, hdr_metadata.hdmi_metadata_type1.display_primaries[i].y);
++    }
++    hdr_metadata.hdmi_metadata_type1.white_point.x =
++        std::round(av_q2d(mdmd->white_point[0]) * 50000.0);
++    hdr_metadata.hdmi_metadata_type1.white_point.y =
++        std::round(av_q2d(mdmd->white_point[1]) * 50000.0);
++
++    CLog::Log(LOGDEBUG, LOGVIDEO, "CWinSystemGbm::{} - white_point.x: {}", __FUNCTION__,
++              hdr_metadata.hdmi_metadata_type1.white_point.x);
++    CLog::Log(LOGDEBUG, LOGVIDEO, "CWinSystemGbm::{} - white_point.y: {}", __FUNCTION__,
++              hdr_metadata.hdmi_metadata_type1.white_point.y);
++  }
++  if (mdmd && mdmd->has_luminance)
++  {
++    // 1 cd/m2 units
++    hdr_metadata.hdmi_metadata_type1.max_display_mastering_luminance =
++        std::round(av_q2d(mdmd->max_luminance));
++
++    // 0.0001 cd/m2 units
++    hdr_metadata.hdmi_metadata_type1.min_display_mastering_luminance =
++        std::round(av_q2d(mdmd->min_luminance) * 10000.0);
++
++    CLog::Log(LOGDEBUG, LOGVIDEO, "CWinSystemGbm::{} - max_display_mastering_luminance: {}",
++              __FUNCTION__, hdr_metadata.hdmi_metadata_type1.max_display_mastering_luminance);
++    CLog::Log(LOGDEBUG, LOGVIDEO, "CWinSystemGbm::{} - min_display_mastering_luminance: {}",
++              __FUNCTION__, hdr_metadata.hdmi_metadata_type1.min_display_mastering_luminance);
++  }
++
++  const AVContentLightMetadata* clmd = KODI::UTILS::GetContentLightMetadata(videoPicture);
++  if (clmd)
++  {
++    hdr_metadata.hdmi_metadata_type1.max_cll = clmd->MaxCLL;
++    hdr_metadata.hdmi_metadata_type1.max_fall = clmd->MaxFALL;
++
++    CLog::Log(LOGDEBUG, LOGVIDEO, "CWinSystemGbm::{} - max_cll: {}", __FUNCTION__,
++              hdr_metadata.hdmi_metadata_type1.max_cll);
++    CLog::Log(LOGDEBUG, LOGVIDEO, "CWinSystemGbm::{} - max_fall: {}", __FUNCTION__,
++              hdr_metadata.hdmi_metadata_type1.max_fall);
++  }
++}
++} // namespace
++
++CDRMPropertyBlob& CWinSystemGbm::PushHDRBlob(int fd, const void* data, std::size_t size)
++{
++  m_hdrBlobs.emplace_back(fd, data, size);
++  while (m_hdrBlobs.size() > 2)
++    m_hdrBlobs.pop_front();
++
++  return m_hdrBlobs.back();
++}
++
+ bool CWinSystemGbm::SetHDR(const VideoPicture* videoPicture)
+ {
+   auto settingsComponent = CServiceBroker::GetSettingsComponent();
+@@ -502,8 +581,6 @@ bool CWinSystemGbm::SetHDR(const VideoPicture* videoPicture)
+       CLog::LogF(LOGDEBUG, "clearing HDR_OUTPUT_METADATA");
+       drm->AddProperty(connector, "HDR_OUTPUT_METADATA", 0);
+       drm->SetActive(true);
+-
+-      m_hdrBlob.Reset();
+     }
+ 
+     m_eotf = KODI::UTILS::Eotf::TRADITIONAL_SDR;
+@@ -524,82 +601,57 @@ bool CWinSystemGbm::SetHDR(const VideoPicture* videoPicture)
+   if (connector->SupportsProperty("HDR_OUTPUT_METADATA") && m_info &&
+       m_info->SupportsHDRStaticMetadataType1() && m_info->SupportsEOTF(eotf))
+   {
+-    hdr_output_metadata hdr_metadata = {};
++    hdr_output_metadata hdr_metadata;
++    BuildHDRMetadata(*videoPicture, eotf, hdr_metadata);
+ 
+-    hdr_metadata.metadata_type = KODI::UTILS::HDMI_STATIC_METADATA_TYPE1;
+-    hdr_metadata.hdmi_metadata_type1.eotf = static_cast<uint8_t>(eotf);
+-    hdr_metadata.hdmi_metadata_type1.metadata_type = KODI::UTILS::HDMI_STATIC_METADATA_TYPE1;
++    std::uint32_t blobId = 0;
++    if (hdr_metadata.hdmi_metadata_type1.eotf)
++      blobId = PushHDRBlob(drm->GetFileDescriptor(), &hdr_metadata, sizeof(hdr_metadata)).Get();
+ 
+-    m_hdrBlob.Reset();
++    drm->AddProperty(connector, "HDR_OUTPUT_METADATA", blobId);
++    drm->SetActive(true);
++  }
+ 
+-    if (hdr_metadata.hdmi_metadata_type1.eotf)
+-    {
+-      const AVMasteringDisplayMetadata* mdmd =
+-          KODI::UTILS::GetMasteringDisplayMetadata(*videoPicture);
+-      if (mdmd && mdmd->has_primaries)
+-      {
+-        // Convert to unsigned 16-bit values in units of 0.00002,
+-        // where 0x0000 represents zero and 0xC350 represents 1.0000
+-        for (int i = 0; i < 3; i++)
+-        {
+-          hdr_metadata.hdmi_metadata_type1.display_primaries[i].x =
+-              std::round(av_q2d(mdmd->display_primaries[i][0]) * 50000.0);
+-          hdr_metadata.hdmi_metadata_type1.display_primaries[i].y =
+-              std::round(av_q2d(mdmd->display_primaries[i][1]) * 50000.0);
+-
+-          CLog::Log(LOGDEBUG, LOGVIDEO, "CWinSystemGbm::{} - display_primaries[{}].x: {}",
+-                    __FUNCTION__, i, hdr_metadata.hdmi_metadata_type1.display_primaries[i].x);
+-          CLog::Log(LOGDEBUG, LOGVIDEO, "CWinSystemGbm::{} - display_primaries[{}].y: {}",
+-                    __FUNCTION__, i, hdr_metadata.hdmi_metadata_type1.display_primaries[i].y);
+-        }
+-        hdr_metadata.hdmi_metadata_type1.white_point.x =
+-            std::round(av_q2d(mdmd->white_point[0]) * 50000.0);
+-        hdr_metadata.hdmi_metadata_type1.white_point.y =
+-            std::round(av_q2d(mdmd->white_point[1]) * 50000.0);
+-
+-        CLog::Log(LOGDEBUG, LOGVIDEO, "CWinSystemGbm::{} - white_point.x: {}", __FUNCTION__,
+-                  hdr_metadata.hdmi_metadata_type1.white_point.x);
+-        CLog::Log(LOGDEBUG, LOGVIDEO, "CWinSystemGbm::{} - white_point.y: {}", __FUNCTION__,
+-                  hdr_metadata.hdmi_metadata_type1.white_point.y);
+-      }
+-      if (mdmd && mdmd->has_luminance)
+-      {
+-        // Convert to unsigned 16-bit value in units of 1 cd/m2,
+-        // where 0x0001 represents 1 cd/m2 and 0xFFFF represents 65535 cd/m2
+-        hdr_metadata.hdmi_metadata_type1.max_display_mastering_luminance =
+-            std::round(av_q2d(mdmd->max_luminance));
+-
+-        // Convert to unsigned 16-bit value in units of 0.0001 cd/m2,
+-        // where 0x0001 represents 0.0001 cd/m2 and 0xFFFF represents 6.5535 cd/m2
+-        hdr_metadata.hdmi_metadata_type1.min_display_mastering_luminance =
+-            std::round(av_q2d(mdmd->min_luminance) * 10000.0);
+-
+-        CLog::Log(LOGDEBUG, LOGVIDEO, "CWinSystemGbm::{} - max_display_mastering_luminance: {}",
+-                  __FUNCTION__, hdr_metadata.hdmi_metadata_type1.max_display_mastering_luminance);
+-        CLog::Log(LOGDEBUG, LOGVIDEO, "CWinSystemGbm::{} - min_display_mastering_luminance: {}",
+-                  __FUNCTION__, hdr_metadata.hdmi_metadata_type1.min_display_mastering_luminance);
+-      }
++  return !m_hdrBlobs.empty() && m_hdrBlobs.back().IsValid();
++}
+ 
+-      const AVContentLightMetadata* clmd = KODI::UTILS::GetContentLightMetadata(*videoPicture);
+-      if (clmd)
+-      {
+-        hdr_metadata.hdmi_metadata_type1.max_cll = clmd->MaxCLL;
+-        hdr_metadata.hdmi_metadata_type1.max_fall = clmd->MaxFALL;
++bool CWinSystemGbm::RefreshHDRLightMetadata(const VideoPicture* videoPicture)
++{
++  if (!videoPicture || m_eotf == KODI::UTILS::Eotf::TRADITIONAL_SDR)
++    return false;
+ 
+-        CLog::Log(LOGDEBUG, LOGVIDEO, "CWinSystemGbm::{} - max_cll: {}", __FUNCTION__,
+-                  hdr_metadata.hdmi_metadata_type1.max_cll);
+-        CLog::Log(LOGDEBUG, LOGVIDEO, "CWinSystemGbm::{} - max_fall: {}", __FUNCTION__,
+-                  hdr_metadata.hdmi_metadata_type1.max_fall);
+-      }
++  if (videoPicture->color_transfer != AVCOL_TRC_SMPTE2084 &&
++      videoPicture->color_transfer != AVCOL_TRC_ARIB_STD_B67)
++    return false;
+ 
+-      m_hdrBlob = CDRMPropertyBlob(drm->GetFileDescriptor(), &hdr_metadata, sizeof(hdr_metadata));
+-    }
++  auto drm = std::dynamic_pointer_cast<CDRMAtomic>(m_DRM);
++  if (!drm)
++    return false;
+ 
+-    drm->AddProperty(connector, "HDR_OUTPUT_METADATA", m_hdrBlob.Get());
+-    drm->SetActive(true);
+-  }
++  auto connector = drm->GetConnector();
++  if (!connector || !connector->SupportsProperty("HDR_OUTPUT_METADATA"))
++    return false;
++
++  if (!m_info || !m_info->SupportsHDRStaticMetadataType1() || !m_info->SupportsEOTF(m_eotf))
++    return false;
+ 
+-  return m_hdrBlob.IsValid();
++  hdr_output_metadata hdr_metadata;
++  BuildHDRMetadata(*videoPicture, m_eotf, hdr_metadata);
++  if (!hdr_metadata.hdmi_metadata_type1.eotf)
++    return false;
++
++  CDRMPropertyBlob& blob =
++      PushHDRBlob(drm->GetFileDescriptor(), &hdr_metadata, sizeof(hdr_metadata));
++  if (!blob.IsValid())
++    return false;
++
++  // No SetActive() - rides the next ordinary FlipPage() commit, no forced modeset.
++  drm->AddProperty(connector, "HDR_OUTPUT_METADATA", blob.Get());
++
++  CLog::LogF(LOGDEBUG, "refreshed HDR light metadata (max_cll: {}, max_fall: {})",
++             hdr_metadata.hdmi_metadata_type1.max_cll, hdr_metadata.hdmi_metadata_type1.max_fall);
++
++  return true;
+ }
+ 
+ bool CWinSystemGbm::IsHDRDisplay()
+diff --git a/xbmc/windowing/gbm/WinSystemGbm.h b/xbmc/windowing/gbm/WinSystemGbm.h
+index e4d675704b5cd..a68273a6e2971 100644
+--- a/xbmc/windowing/gbm/WinSystemGbm.h
++++ b/xbmc/windowing/gbm/WinSystemGbm.h
+@@ -18,6 +18,7 @@
+ 
+ #include "platform/linux/input/LibInputHandler.h"
+ 
++#include <deque>
+ #include <utility>
+ 
+ #include <gbm.h>
+@@ -67,6 +68,7 @@ class CWinSystemGbm : public CWinSystemBase
+   KODI::UTILS::Colorimetry GetColorimetry() const override { return m_colorimetry; }
+   KODI::UTILS::Eotf GetEotf() const override { return m_eotf; }
+   bool SetHDR(const VideoPicture* videoPicture) override;
++  bool RefreshHDRLightMetadata(const VideoPicture* videoPicture) override;
+   bool IsHDRDisplay() override;
+   CHDRCapabilities GetDisplayHDRCapabilities() const override;
+ 
+@@ -99,7 +101,9 @@ class CWinSystemGbm : public CWinSystemBase
+   std::unique_ptr<CLibInputHandler> m_libinput;
+ 
+ private:
+-  CDRMPropertyBlob m_hdrBlob;
++  CDRMPropertyBlob& PushHDRBlob(int fd, const void* data, std::size_t size);
++
++  std::deque<CDRMPropertyBlob> m_hdrBlobs;
+   KODI::UTILS::Eotf m_eotf = KODI::UTILS::Eotf::TRADITIONAL_SDR;
+   KODI::UTILS::Colorimetry m_colorimetry = KODI::UTILS::Colorimetry::DEFAULT;
+ 
+diff --git a/xbmc/windowing/gbm/drm/DRMAtomic.cpp b/xbmc/windowing/gbm/drm/DRMAtomic.cpp
+index 7a6f87c2db3e4..989e7297e5873 100644
+--- a/xbmc/windowing/gbm/drm/DRMAtomic.cpp
++++ b/xbmc/windowing/gbm/drm/DRMAtomic.cpp
+@@ -18,6 +18,7 @@
+ 
+ #include <chrono>
+ #include <errno.h>
++#include <mutex>
+ #include <string.h>
+ #include <thread>
+ 
+@@ -30,6 +31,8 @@ using namespace KODI::WINDOWING::GBM;
+ 
+ void CDRMAtomic::DrmAtomicCommit(int fb_id, int flags, bool rendered, bool videoLayer)
+ {
++  std::unique_lock lock(m_reqSection);
++
+   // Declared at function scope so the blob outlives drmModeAtomicCommit.
+   // DRM requires the blob to remain alive for the duration of the commit;
+   // destroying it before the commit returns leaves the atomic request
+@@ -312,6 +315,8 @@ bool CDRMAtomic::AddProperty(CDRMObject* object, const char* name, uint64_t valu
+ {
+   if (!object)
+     return false;
++
++  std::unique_lock lock(m_reqSection);
+   return m_req->AddProperty(object, name, value);
+ }
+ 
+diff --git a/xbmc/windowing/gbm/drm/DRMAtomic.h b/xbmc/windowing/gbm/drm/DRMAtomic.h
+index c20531b682e1e..f5c5c3c25da9d 100644
+--- a/xbmc/windowing/gbm/drm/DRMAtomic.h
++++ b/xbmc/windowing/gbm/drm/DRMAtomic.h
+@@ -9,6 +9,7 @@
+ #pragma once
+ 
+ #include "DRMUtils.h"
++#include "threads/CriticalSection.h"
+ #include "utils/log.h"
+ 
+ #include <cstdint>
+@@ -46,6 +47,8 @@ class CDRMAtomic : public CDRMUtils
+   bool m_need_modeset{true};
+   bool m_active = true;
+ 
++  CCriticalSection m_reqSection;
++
+   class CDRMAtomicRequest
+   {
+   public:
