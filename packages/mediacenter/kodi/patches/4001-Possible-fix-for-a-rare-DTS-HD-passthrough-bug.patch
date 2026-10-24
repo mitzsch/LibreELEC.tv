@@ -1,0 +1,90 @@
+From 5d40923d4fc39fc20dae5d7f8d8b779f2d3c640b Mon Sep 17 00:00:00 2001
+From: Alex Mitzsch <43502191+mitzsch@users.noreply.github.com>
+Date: Sat, 24 Oct 2026 16:45:53 +0200
+Subject: [PATCH] Possible fix for a rare DTS-HD passthrough bug
+
+---
+ xbmc/cores/AudioEngine/Utils/AEStreamInfo.cpp | 32 ++++++++++++++++++-
+ xbmc/cores/AudioEngine/Utils/AEStreamInfo.h   |  2 ++
+ 2 files changed, 33 insertions(+), 1 deletion(-)
+
+diff --git a/xbmc/cores/AudioEngine/Utils/AEStreamInfo.cpp b/xbmc/cores/AudioEngine/Utils/AEStreamInfo.cpp
+index f76f7417b3..9b5700ad44 100644
+--- a/xbmc/cores/AudioEngine/Utils/AEStreamInfo.cpp
++++ b/xbmc/cores/AudioEngine/Utils/AEStreamInfo.cpp
+@@ -27,6 +27,9 @@
+ #define DTS_SFREQ_COUNT 16
+ #define MAX_EAC3_BLOCKS 6
+ #define UNKNOWN_DTS_EXTENSION 255
++// Number of consecutive frames that must announce the same non-MA extension before
++// an established DTS-HD MA stream is downgraded to plain DTS-HD.
++#define DTS_HD_DOWNGRADE_FRAMES 8
+ 
+ static const uint16_t AC3Bitrates[] = {32,  40,  48,  56,  64,  80,  96,  112, 128, 160,
+                                        192, 224, 256, 320, 384, 448, 512, 576, 640};
+@@ -100,6 +103,8 @@ void CAEStreamParser::Reset()
+   m_bufferSize = 0;
+   m_needBytes = 0;
+   m_hasSync = false;
++  m_dtsHdDowngradeSync = 0;
++  m_dtsHdDowngradeCount = 0;
+ }
+ 
+ int CAEStreamParser::AddData(uint8_t* data,
+@@ -221,7 +226,7 @@ void CAEStreamParser::GetPacket(uint8_t** buffer, unsigned int* bufferSize)
+     // make sure the buffer is allocated and big enough
+     if (!*buffer || !bufferSize || *bufferSize < size)
+     {
+-      delete[] * buffer;
++      delete[] *buffer;
+       *buffer = new uint8_t[size];
+     }
+ 
+@@ -654,6 +659,31 @@ unsigned int CAEStreamParser::SyncDTS(uint8_t* data, unsigned int size)
+       else
+         dataType = m_info.m_type;
+ 
++      // The 4 bytes at this position are not a reliable indicator for the extension type:
++      // in frames where the lossless extension is continued from the previous packet they
++      // are arbitrary payload and can match one of the preambles by chance. Don't leave an
++      // established DTS-HD MA stream because of a single frame, require the same
++      // non-MA extension to show up in several consecutive frames.
++      if (m_hasSync && skip == 0 && m_info.m_type == CAEStreamInfo::STREAM_TYPE_DTSHD_MA &&
++          dataType == CAEStreamInfo::STREAM_TYPE_DTSHD)
++      {
++        if (hd_sync == m_dtsHdDowngradeSync)
++          ++m_dtsHdDowngradeCount;
++        else
++        {
++          m_dtsHdDowngradeSync = hd_sync;
++          m_dtsHdDowngradeCount = 1;
++        }
++
++        if (m_dtsHdDowngradeCount < DTS_HD_DOWNGRADE_FRAMES)
++          dataType = CAEStreamInfo::STREAM_TYPE_DTSHD_MA;
++      }
++      else
++      {
++        m_dtsHdDowngradeSync = 0;
++        m_dtsHdDowngradeCount = 0;
++      }
++
+       m_coreSize = m_fsize;
+       m_fsize += hd_size;
+     }
+diff --git a/xbmc/cores/AudioEngine/Utils/AEStreamInfo.h b/xbmc/cores/AudioEngine/Utils/AEStreamInfo.h
+index acfa77d987..78dee1a339 100644
+--- a/xbmc/cores/AudioEngine/Utils/AEStreamInfo.h
++++ b/xbmc/cores/AudioEngine/Utils/AEStreamInfo.h
+@@ -86,6 +86,8 @@ private:
+ 
+   unsigned int m_coreSize = 0;         /* core size for dtsHD */
+   unsigned int m_dtsBlocks = 0;
++  unsigned int m_dtsHdDowngradeSync{0};
++  unsigned int m_dtsHdDowngradeCount{0};
+   unsigned int m_fsize = 0;
+   int m_substreams = 0;       /* used for TrueHD  */
+   AVCRC m_crcTrueHD[1024];  /* TrueHD crc table */
+-- 
+2.55.0.windows.3
+
