@@ -1,0 +1,94 @@
+--- a/drivers/gpu/drm/amd/display/amdgpu_dm/amdgpu_dm_connector.c
++++ b/drivers/gpu/drm/amd/display/amdgpu_dm/amdgpu_dm_connector.c
+@@ -70,6 +70,8 @@
+ #include <drm/display/drm_hdcp_helper.h>
+ 
+ #include <linux/backlight.h>
++#include <linux/math64.h>
++#include <linux/module.h>
+ 
+ #include <media/cec-notifier.h>
+ 
+@@ -871,6 +873,73 @@
+ }
+ EXPORT_IF_KUNIT(adjust_colour_depth_from_display_info);
+ 
++/*
++ * Pixel clock refinement for exact 24/30/48/60/120 Hz (x 1000/1001) timings.
++ *
++ * The DRM mode only carries the pixel clock in whole kHz, which leaves a
++ * rounding error of a few ppm. Snap to the exact nominal clock (in 100 Hz
++ * units) and optionally apply a small trim so the display clock can be
++ * matched to the audio clock (useful for bitstream passthrough, where
++ * Kodi cannot resample to the display).
++ */
++static int dm_pixclk_trim; /* in 0.1 ppm */
++module_param_named(pixclk_trim, dm_pixclk_trim, int, 0644);
++MODULE_PARM_DESC(pixclk_trim, "Pixel clock trim in 0.1 ppm for 24/30/48/60/120 Hz x 1000/1001 modes (default 0, range +-1000)");
++
++static int dm_pixclk_int;
++module_param_named(pixclk_int, dm_pixclk_int, int, 0644);
++MODULE_PARM_DESC(pixclk_int, "Also refine integer-rate modes (24.000/30/48/60/120 Hz) and apply the trim (default 0)");
++
++static void dm_log_pixclk(const struct drm_display_mode *m, u32 out, int trim)
++{
++	static u32 last_in, last_out;
++	static int last_trim;
++	u64 total = (u64)m->crtc_htotal * m->crtc_vtotal;
++	u64 uhz;
++
++	if (last_in == m->crtc_clock && last_out == out && last_trim == trim)
++		return;
++	last_in = m->crtc_clock;
++	last_out = out;
++	last_trim = trim;
++
++	uhz = div64_u64((u64)out * 100ULL * 1000000ULL, total);
++	pr_info("pixclk_trim: %ux%u htotal=%u vtotal=%u clock %u kHz -> %u00 Hz (trim %d), refresh %llu.%06llu Hz\n",
++		m->hdisplay, m->vdisplay, m->crtc_htotal, m->crtc_vtotal,
++		m->crtc_clock, out, trim,
++		div_u64(uhz, 1000000), uhz % 1000000);
++}
++
++static u32 dm_refine_pix_clk_100hz(const struct drm_display_mode *m)
++{
++	static const u16 fps[] = { 24, 30, 48, 60, 120 };
++	u64 total = (u64)m->crtc_htotal * m->crtc_vtotal;
++	int trim = clamp(dm_pixclk_trim, -1000, 1000);
++	int i, j;
++
++	if (m->flags & (DRM_MODE_FLAG_INTERLACE | DRM_MODE_FLAG_DBLSCAN))
++		return m->crtc_clock * 10;
++
++	for (i = 0; i < ARRAY_SIZE(fps); i++) {
++		/* j = 0: x 1000/1001, j = 1: integer rate (only if enabled) */
++		for (j = 0; j < (dm_pixclk_int ? 2 : 1); j++) {
++			u64 nom = total * fps[i];
++			u32 out;
++
++			if (!j)
++				nom = div_u64(nom * 1000ULL, 1001);
++			if (abs((s64)nom - (s64)m->crtc_clock * 1000) > 600)
++				continue;
++
++			nom = mul_u64_u32_div(nom, 10000000 + trim, 10000000);
++			out = div_u64(nom + 50, 100);
++			dm_log_pixclk(m, out, trim);
++			return out;
++		}
++	}
++	return m->crtc_clock * 10;
++}
++
+ STATIC_IFN_KUNIT void fill_stream_properties_from_drm_display_mode(
+ 	struct dc_stream_state *stream,
+ 	const struct drm_display_mode *mode_in,
+@@ -964,7 +1033,7 @@
+ 		timing_out->v_addressable = mode_in->crtc_vdisplay;
+ 		timing_out->v_front_porch = mode_in->crtc_vsync_start - mode_in->crtc_vdisplay;
+ 		timing_out->v_sync_width = mode_in->crtc_vsync_end - mode_in->crtc_vsync_start;
+-		timing_out->pix_clk_100hz = mode_in->crtc_clock * 10;
++		timing_out->pix_clk_100hz = dm_refine_pix_clk_100hz(mode_in);
+ 	}
+ 
+ 	timing_out->aspect_ratio = get_aspect_ratio(mode_in);
