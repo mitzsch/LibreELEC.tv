@@ -1,0 +1,165 @@
+From b8a5599a5daac9c324169bf47eb55822aa8e327b Mon Sep 17 00:00:00 2001
+From: Alex Mitzsch <43502191+mitzsch@users.noreply.github.com>
+Date: Sun, 18 Oct 2026 20:19:17 +0200
+Subject: [PATCH] Push display metadata (luminance, primaries, white point)
+ live
+
+---
+ .../DVDCodecs/Video/DVDVideoCodec.cpp         | 65 ++++++++++++++-----
+ .../VideoRenderers/RenderManager.cpp          | 25 ++++++-
+ xbmc/windowing/gbm/WinSystemGbm.cpp           | 18 ++++-
+ 3 files changed, 87 insertions(+), 21 deletions(-)
+
+diff --git a/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodec.cpp b/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodec.cpp
+index c446b5aecf..aee64adcc1 100644
+--- a/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodec.cpp
++++ b/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodec.cpp
+@@ -81,19 +81,10 @@ VideoPicture& VideoPicture::SetParams(const VideoPicture &pic)
+ 
+ bool VideoPicture::CompareDisplayMetadata(const VideoPicture& pic) const
+ {
+-  if (this->hasDisplayMetadata != pic.hasDisplayMetadata)
+-    return false;
+-
+-  // both this and pic not has display metadata (e.g. SDR video)
+-  // returns true because it is equal and there is no need to compare
+-  if (!pic.hasDisplayMetadata)
+-    return true;
+-
+-  // both this and pic has display metadata
+-  return this->displayMetadata.max_luminance.num == pic.displayMetadata.max_luminance.num &&
+-         this->displayMetadata.max_luminance.den == pic.displayMetadata.max_luminance.den &&
+-         this->displayMetadata.min_luminance.num == pic.displayMetadata.min_luminance.num &&
+-         this->displayMetadata.min_luminance.den == pic.displayMetadata.min_luminance.den;
++  // Only the presence of display metadata requires a reconfigure (e.g. SDR <-> HDR).
++  // The content (luminance, primaries, white point) is pushed live,
++  // see CompareLightMetadata().
++  return this->hasDisplayMetadata == pic.hasDisplayMetadata;
+ }
+ 
+ bool VideoPicture::IsSameParams(const VideoPicture& pic) const
+@@ -107,12 +98,50 @@ bool VideoPicture::IsSameParams(const VideoPicture& pic) const
+ 
+ bool VideoPicture::CompareLightMetadata(const VideoPicture& pic) const
+ {
+-  if (this->hasLightMetadata != pic.hasLightMetadata)
++  if (this->hasLightMetadata != pic.hasLightMetadata ||
++      this->hasDisplayMetadata != pic.hasDisplayMetadata)
+     return false;
+ 
+-  if (!pic.hasLightMetadata)
++  if (this->hasLightMetadata &&
++      (this->lightMetadata.MaxCLL != pic.lightMetadata.MaxCLL ||
++       this->lightMetadata.MaxFALL != pic.lightMetadata.MaxFALL))
++    return false;
++
++  if (!this->hasDisplayMetadata)
+     return true;
+ 
+-  return this->lightMetadata.MaxCLL == pic.lightMetadata.MaxCLL &&
+-         this->lightMetadata.MaxFALL == pic.lightMetadata.MaxFALL;
+-}
++  const AVMasteringDisplayMetadata& a = this->displayMetadata;
++  const AVMasteringDisplayMetadata& b = pic.displayMetadata;
++
++  if (a.has_luminance != b.has_luminance || a.has_primaries != b.has_primaries)
++    return false;
++
++  if (a.has_luminance &&
++      (a.max_luminance.num != b.max_luminance.num ||
++       a.max_luminance.den != b.max_luminance.den ||
++       a.min_luminance.num != b.min_luminance.num ||
++       a.min_luminance.den != b.min_luminance.den))
++    return false;
++
++  if (a.has_primaries)
++  {
++    for (int i = 0; i < 3; i++)
++    {
++      for (int j = 0; j < 2; j++)
++      {
++        if (a.display_primaries[i][j].num != b.display_primaries[i][j].num ||
++            a.display_primaries[i][j].den != b.display_primaries[i][j].den)
++          return false;
++      }
++    }
++
++    for (int j = 0; j < 2; j++)
++    {
++      if (a.white_point[j].num != b.white_point[j].num ||
++          a.white_point[j].den != b.white_point[j].den)
++        return false;
++    }
++  }
++
++  return true;
++}
+\ No newline at end of file
+diff --git a/xbmc/cores/VideoPlayer/VideoRenderers/RenderManager.cpp b/xbmc/cores/VideoPlayer/VideoRenderers/RenderManager.cpp
+index b33e42a46a..4956fb8c3c 100644
+--- a/xbmc/cores/VideoPlayer/VideoRenderers/RenderManager.cpp
++++ b/xbmc/cores/VideoPlayer/VideoRenderers/RenderManager.cpp
+@@ -102,7 +102,30 @@ bool CRenderManager::Configure(const VideoPicture& picture, float fps, unsigned
+       // check if HDR light metadata changes during playback
+       if (!m_picture.CompareLightMetadata(picture))
+       {
+-        CLog::Log(LOGDEBUG, "CRenderManager::Configure - HDR light metadata has changed");
++        if (m_picture.hasDisplayMetadata && picture.hasDisplayMetadata)
++        {
++          CLog::Log(LOGDEBUG,
++                   "CRenderManager::Configure - HDR mastering metadata changed: "
++                   "lum min {:.4f} -> {:.4f}, max {:.1f} -> {:.1f}, "
++                   "wp x {:.4f} -> {:.4f}, y {:.4f} -> {:.4f}",
++                   av_q2d(m_picture.displayMetadata.min_luminance),
++                   av_q2d(picture.displayMetadata.min_luminance),
++                   av_q2d(m_picture.displayMetadata.max_luminance),
++                   av_q2d(picture.displayMetadata.max_luminance),
++                   av_q2d(m_picture.displayMetadata.white_point[0]),
++                   av_q2d(picture.displayMetadata.white_point[0]),
++                   av_q2d(m_picture.displayMetadata.white_point[1]),
++                   av_q2d(picture.displayMetadata.white_point[1]));
++        }
++
++        if (m_picture.hasLightMetadata && picture.hasLightMetadata)
++        {
++          CLog::Log(LOGDEBUG,
++                   "CRenderManager::Configure - HDR MaxCLL {} -> {}, MaxFALL {} -> {}",
++                   m_picture.lightMetadata.MaxCLL, picture.lightMetadata.MaxCLL,
++                   m_picture.lightMetadata.MaxFALL, picture.lightMetadata.MaxFALL);
++        }
++
+         m_picture.SetParams(picture);
+         m_pRenderer->UpdateLightMetadata(picture);
+       }
+diff --git a/xbmc/windowing/gbm/WinSystemGbm.cpp b/xbmc/windowing/gbm/WinSystemGbm.cpp
+index 7fca4c857c..0b2bd0cc04 100644
+--- a/xbmc/windowing/gbm/WinSystemGbm.cpp
++++ b/xbmc/windowing/gbm/WinSystemGbm.cpp
+@@ -671,8 +671,22 @@ bool CWinSystemGbm::RefreshHDRLightMetadata(const VideoPicture* videoPicture)
+   // No SetActive() - rides the next ordinary FlipPage() commit, no forced modeset.
+   drm->AddProperty(connector, "HDR_OUTPUT_METADATA", blob.Get());
+ 
+-  CLog::LogF(LOGDEBUG, "refreshed HDR light metadata (max_cll: {}, max_fall: {})",
+-             hdr_metadata.hdmi_metadata_type1.max_cll, hdr_metadata.hdmi_metadata_type1.max_fall);
++  CLog::LogF(LOGDEBUG,
++            "refreshed HDR metadata (max_cll: {}, max_fall: {}, max_lum: {} nits, "
++            "min_lum: {:.4f} nits, wp: {:.4f}/{:.4f}, "
++            "R: {:.4f}/{:.4f}, G: {:.4f}/{:.4f}, B: {:.4f}/{:.4f})",
++            hdr_metadata.hdmi_metadata_type1.max_cll,
++            hdr_metadata.hdmi_metadata_type1.max_fall,
++            hdr_metadata.hdmi_metadata_type1.max_display_mastering_luminance,
++            hdr_metadata.hdmi_metadata_type1.min_display_mastering_luminance / 10000.0,
++            hdr_metadata.hdmi_metadata_type1.white_point.x / 50000.0,
++            hdr_metadata.hdmi_metadata_type1.white_point.y / 50000.0,
++            hdr_metadata.hdmi_metadata_type1.display_primaries[0].x / 50000.0,
++            hdr_metadata.hdmi_metadata_type1.display_primaries[0].y / 50000.0,
++            hdr_metadata.hdmi_metadata_type1.display_primaries[1].x / 50000.0,
++            hdr_metadata.hdmi_metadata_type1.display_primaries[1].y / 50000.0,
++            hdr_metadata.hdmi_metadata_type1.display_primaries[2].x / 50000.0,
++            hdr_metadata.hdmi_metadata_type1.display_primaries[2].y / 50000.0);
+ 
+   return true;
+ }
+-- 
+2.56.0.windows.2
+
