@@ -635,15 +635,11 @@ index 2105a767169f35bc6d07799aabfa751d5da9bc3c..29f5b2a4d8cce225a5da8040e0142840
    bool IsHDRDisplay() override;
    CHDRCapabilities GetDisplayHDRCapabilities() const override;
  
-@@ -100,7 +103,11 @@ protected:
+@@ -100,7 +103,7 @@ protected:
    std::unique_ptr<CLibInputHandler> m_libinput;
  
  private:
 -  CDRMPropertyBlob m_hdrBlob;
-+  static void ApplyLimitGuiSize(void* userptr);
-+
-+  KODI::MESSAGING::ThreadMessageCallback m_limitGuiSizeCallback{ApplyLimitGuiSize, this};
-+
 +  std::shared_ptr<CDRMPropertyBlob> m_hdrBlob;
    KODI::UTILS::Eotf m_eotf = KODI::UTILS::Eotf::TRADITIONAL_SDR;
    KODI::UTILS::Colorimetry m_colorimetry = KODI::UTILS::Colorimetry::DEFAULT;
