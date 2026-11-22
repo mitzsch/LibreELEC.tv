@@ -1,28 +1,37 @@
 diff --git a/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodec.cpp b/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodec.cpp
-index a41939d8fdf10824f880fc56fa7e96f8496a490d..798efa2ff6b67e5e217c0ebba4f81af458afa6c8 100644
+index a41939d8fd..f32b46ae3c 100644
 --- a/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodec.cpp
 +++ b/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodec.cpp
-@@ -79,7 +79,7 @@ VideoPicture& VideoPicture::SetParams(const VideoPicture &pic)
+@@ -79,7 +79,16 @@ VideoPicture& VideoPicture::SetParams(const VideoPicture &pic)
    return *this;
  }
  
 -bool VideoPicture::CompareDisplayMetadata(const VideoPicture& pic) const
++bool VideoPicture::IsFullRange(AVColorRange range, AVPixelFormat format)
++{
++  if (range != AVCOL_RANGE_UNSPECIFIED)
++    return range == AVCOL_RANGE_JPEG;
++
++  const AVPixFmtDescriptor* desc = av_pix_fmt_desc_get(format);
++  return desc && (desc->flags & AV_PIX_FMT_FLAG_RGB);
++}
++
 +bool VideoPicture::CompareDisplayMetadata(const VideoPicture& pic, bool presenceOnly) const
  {
    if (this->hasDisplayMetadata != pic.hasDisplayMetadata)
      return false;
-@@ -89,6 +89,10 @@ bool VideoPicture::CompareDisplayMetadata(const VideoPicture& pic) const
+@@ -89,6 +98,10 @@ bool VideoPicture::CompareDisplayMetadata(const VideoPicture& pic) const
    if (!pic.hasDisplayMetadata)
      return true;
  
-+  // The content is pushed live by the renderer, see CompareLightMetadata()
++  // The content is pushed live by the renderer
 +  if (presenceOnly)
 +    return true;
 +
    // both this and pic has display metadata
    return this->displayMetadata.max_luminance.num == pic.displayMetadata.max_luminance.num &&
           this->displayMetadata.max_luminance.den == pic.displayMetadata.max_luminance.den &&
-@@ -96,11 +100,58 @@ bool VideoPicture::CompareDisplayMetadata(const VideoPicture& pic) const
+@@ -96,11 +109,28 @@ bool VideoPicture::CompareDisplayMetadata(const VideoPicture& pic) const
           this->displayMetadata.min_luminance.den == pic.displayMetadata.min_luminance.den;
  }
  
@@ -31,7 +40,13 @@ index a41939d8fdf10824f880fc56fa7e96f8496a490d..798efa2ff6b67e5e217c0ebba4f81af4
  {
    return this->iWidth == pic.iWidth && this->iHeight == pic.iHeight &&
           this->iDisplayWidth == pic.iDisplayWidth && this->iDisplayHeight == pic.iDisplayHeight &&
-          this->stereoMode == pic.stereoMode && this->color_primaries == pic.color_primaries &&
+-         this->stereoMode == pic.stereoMode && this->color_primaries == pic.color_primaries &&
++         IsSameParamsExceptSize(pic, liveHDRMetadata);
++}
++
++bool VideoPicture::IsSameParamsExceptSize(const VideoPicture& pic, bool liveHDRMetadata) const
++{
++  return this->stereoMode == pic.stereoMode && this->color_primaries == pic.color_primaries &&
           this->color_transfer == pic.color_transfer && this->hdrType == pic.hdrType &&
 -         CompareDisplayMetadata(pic);
 +         CompareDisplayMetadata(pic, liveHDRMetadata);
@@ -39,55 +54,20 @@ index a41939d8fdf10824f880fc56fa7e96f8496a490d..798efa2ff6b67e5e217c0ebba4f81af4
 +
 +bool VideoPicture::CompareLightMetadata(const VideoPicture& pic) const
 +{
-+  if (this->hasLightMetadata != pic.hasLightMetadata ||
-+      this->hasDisplayMetadata != pic.hasDisplayMetadata)
++  if (this->hasLightMetadata != pic.hasLightMetadata)
 +    return false;
 +
-+  if (this->hasLightMetadata && (this->lightMetadata.MaxCLL != pic.lightMetadata.MaxCLL ||
-+                                 this->lightMetadata.MaxFALL != pic.lightMetadata.MaxFALL))
-+    return false;
-+
-+  if (!this->hasDisplayMetadata)
++  if (!pic.hasLightMetadata)
 +    return true;
 +
-+  const AVMasteringDisplayMetadata& a = this->displayMetadata;
-+  const AVMasteringDisplayMetadata& b = pic.displayMetadata;
-+
-+  if (a.has_luminance != b.has_luminance || a.has_primaries != b.has_primaries)
-+    return false;
-+
-+  if (a.has_luminance &&
-+      (a.max_luminance.num != b.max_luminance.num || a.max_luminance.den != b.max_luminance.den ||
-+       a.min_luminance.num != b.min_luminance.num || a.min_luminance.den != b.min_luminance.den))
-+    return false;
-+
-+  if (a.has_primaries)
-+  {
-+    for (int i = 0; i < 3; i++)
-+    {
-+      for (int j = 0; j < 2; j++)
-+      {
-+        if (a.display_primaries[i][j].num != b.display_primaries[i][j].num ||
-+            a.display_primaries[i][j].den != b.display_primaries[i][j].den)
-+          return false;
-+      }
-+    }
-+
-+    for (int j = 0; j < 2; j++)
-+    {
-+      if (a.white_point[j].num != b.white_point[j].num ||
-+          a.white_point[j].den != b.white_point[j].den)
-+        return false;
-+    }
-+  }
-+
-+  return true;
++  return this->lightMetadata.MaxCLL == pic.lightMetadata.MaxCLL &&
++         this->lightMetadata.MaxFALL == pic.lightMetadata.MaxFALL;
  }
 diff --git a/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodec.h b/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodec.h
-index 08933a0c101ec911b40b41c953b96904f2169d5b..87eff614e75b7cb53d8df279182bc5fe186d13a6 100644
+index 08933a0c10..45f222add9 100644
 --- a/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodec.h
 +++ b/xbmc/cores/VideoPlayer/DVDCodecs/Video/DVDVideoCodec.h
-@@ -50,7 +50,14 @@ public:
+@@ -50,8 +50,31 @@ public:
    VideoPicture& CopyRef(const VideoPicture &pic);
    VideoPicture& SetParams(const VideoPicture &pic);
    void Reset(); // reinitialize members, videoBuffer will be released if set!
@@ -100,26 +80,49 @@ index 08933a0c101ec911b40b41c953b96904f2169d5b..87eff614e75b7cb53d8df279182bc5fe
 +  bool IsSameParams(const VideoPicture& pic, bool liveHDRMetadata = false) const;
 +  /*! \brief Compare HDR light metadata (MaxCLL/MaxFALL) independently of IsSameParams() */
 +  bool CompareLightMetadata(const VideoPicture& pic) const;
++  /*!
++   * \brief Compare HDR mastering display metadata.
++   * \param presenceOnly true to only compare whether both pictures have it
++   */
++  bool CompareDisplayMetadata(const VideoPicture& pic, bool presenceOnly) const;
++
++  /*!
++   * \brief Whether \p pic differs from this picture in nothing IsSameParams() compares but its
++   * size and display size.
++   */
++  bool IsSameParamsExceptSize(const VideoPicture& pic, bool liveHDRMetadata = false) const;
  
++  /*!
++   * \brief Whether a picture of \p format is full range when its stream gives \p range. RGB with
++   * no range given is full range.
++   */
++  static bool IsFullRange(AVColorRange range, AVPixelFormat format);
    CVideoBuffer *videoBuffer = nullptr;
  
-@@ -95,7 +102,7 @@ private:
+   double pts; // timestamp in seconds, used in the CVideoPlayer class to keep track of pts
+@@ -94,8 +117,6 @@ public:
+ private:
    VideoPicture(VideoPicture const&) = default;
    VideoPicture& operator=(VideoPicture const&) = default;
- 
+-
 -  bool CompareDisplayMetadata(const VideoPicture& pic) const;
-+  bool CompareDisplayMetadata(const VideoPicture& pic, bool presenceOnly) const;
  };
  
  #define DVP_FLAG_TOP_FIELD_FIRST    0x00000001
 diff --git a/xbmc/cores/VideoPlayer/VideoRenderers/BaseRenderer.h b/xbmc/cores/VideoPlayer/VideoRenderers/BaseRenderer.h
-index 14546a168a3de9ed639ea1b0f8f306fca3e86a64..1e7d1b5c8c891733a74aaa7981bcf55fe06a4010 100644
+index c2dc31ebfd..fb23fca323 100644
 --- a/xbmc/cores/VideoPlayer/VideoRenderers/BaseRenderer.h
 +++ b/xbmc/cores/VideoPlayer/VideoRenderers/BaseRenderer.h
-@@ -90,6 +90,16 @@ public:
+@@ -92,6 +92,22 @@ public:
    virtual void RenderUpdate(
        int index, int index2, bool clear, unsigned int flags, unsigned int alpha) = 0;
    virtual bool ConfigChanged(const VideoPicture &picture) = 0;
++  /*!
++   * \brief Take pictures of another size from here on, keeping all else Configure() set up.
++   * The pictures the renderer holds are released.
++   * \return false if the renderer has to be configured again for them
++   */
++  virtual bool ChangePictureSize(const VideoPicture& picture) { return false; }
 +  /*!
 +   * \brief Called when only the HDR metadata content (mastering display, MaxCLL/MaxFALL) changed
 +   * mid-stream
@@ -134,7 +137,7 @@ index 14546a168a3de9ed639ea1b0f8f306fca3e86a64..1e7d1b5c8c891733a74aaa7981bcf55f
    // Feature support
    virtual bool SupportsMultiPassRendering() = 0;
 diff --git a/xbmc/cores/VideoPlayer/VideoRenderers/HwDecRender/RendererDRMPRIME.cpp b/xbmc/cores/VideoPlayer/VideoRenderers/HwDecRender/RendererDRMPRIME.cpp
-index 40556ef057a16efbac18936054a7bbec83a178a3..0dcb341429c6f95d8bd86d4855a272a09ffbd2e3 100644
+index 40556ef057..0dcb341429 100644
 --- a/xbmc/cores/VideoPlayer/VideoRenderers/HwDecRender/RendererDRMPRIME.cpp
 +++ b/xbmc/cores/VideoPlayer/VideoRenderers/HwDecRender/RendererDRMPRIME.cpp
 @@ -276,6 +276,20 @@ bool CRendererDRMPRIME::ConfigChanged(const VideoPicture& picture)
@@ -159,7 +162,7 @@ index 40556ef057a16efbac18936054a7bbec83a178a3..0dcb341429c6f95d8bd86d4855a272a0
  {
    switch (feature)
 diff --git a/xbmc/cores/VideoPlayer/VideoRenderers/HwDecRender/RendererDRMPRIME.h b/xbmc/cores/VideoPlayer/VideoRenderers/HwDecRender/RendererDRMPRIME.h
-index 11cb03dee552f12111a3df3da175ee249b30c336..c21f8eff99048f5d0ec5ce53e1e6e24d13959be8 100644
+index 11cb03dee5..c21f8eff99 100644
 --- a/xbmc/cores/VideoPlayer/VideoRenderers/HwDecRender/RendererDRMPRIME.h
 +++ b/xbmc/cores/VideoPlayer/VideoRenderers/HwDecRender/RendererDRMPRIME.h
 @@ -39,6 +39,8 @@ public:
@@ -172,10 +175,10 @@ index 11cb03dee552f12111a3df3da175ee249b30c336..c21f8eff99048f5d0ec5ce53e1e6e24d
    // Feature support
    bool SupportsMultiPassRendering() override { return false; }
 diff --git a/xbmc/cores/VideoPlayer/VideoRenderers/HwDecRender/RendererDRMPRIMEGLES.cpp b/xbmc/cores/VideoPlayer/VideoRenderers/HwDecRender/RendererDRMPRIMEGLES.cpp
-index e1ccc815f87ecf60af7aa222a818fe0b1b34e9fd..03518b46ee34b04f72cf4b80176acecd96580687 100644
+index 59b99acdb8..dc2ff2a4d1 100644
 --- a/xbmc/cores/VideoPlayer/VideoRenderers/HwDecRender/RendererDRMPRIMEGLES.cpp
 +++ b/xbmc/cores/VideoPlayer/VideoRenderers/HwDecRender/RendererDRMPRIMEGLES.cpp
-@@ -446,6 +446,20 @@ bool CRendererDRMPRIMEGLES::ConfigChanged(const VideoPicture& picture)
+@@ -448,6 +448,20 @@ bool CRendererDRMPRIMEGLES::ConfigChanged(const VideoPicture& picture)
    return false;
  }
  
@@ -197,7 +200,7 @@ index e1ccc815f87ecf60af7aa222a818fe0b1b34e9fd..03518b46ee34b04f72cf4b80176acecd
  {
    BUFFER& buf = m_buffers[index];
 diff --git a/xbmc/cores/VideoPlayer/VideoRenderers/HwDecRender/RendererDRMPRIMEGLES.h b/xbmc/cores/VideoPlayer/VideoRenderers/HwDecRender/RendererDRMPRIMEGLES.h
-index 8bd868868878156d5bbcb76c0bf06b62a3bdce7b..ad6c3acb9554e1ac11d786e903ce5328afc82ab4 100644
+index 8bd8688688..ad6c3acb95 100644
 --- a/xbmc/cores/VideoPlayer/VideoRenderers/HwDecRender/RendererDRMPRIMEGLES.h
 +++ b/xbmc/cores/VideoPlayer/VideoRenderers/HwDecRender/RendererDRMPRIMEGLES.h
 @@ -64,6 +64,8 @@ public:
@@ -210,7 +213,7 @@ index 8bd868868878156d5bbcb76c0bf06b62a3bdce7b..ad6c3acb9554e1ac11d786e903ce5328
    // Feature support
    bool SupportsMultiPassRendering() override { return false; }
 diff --git a/xbmc/cores/VideoPlayer/VideoRenderers/LinuxRendererGL.cpp b/xbmc/cores/VideoPlayer/VideoRenderers/LinuxRendererGL.cpp
-index 3be87a6254132544521e4463aed7f32e5ef03b15..5d176f75dddc2360b541d42a570c2ed898794dc6 100644
+index e26332a329..a04680615e 100644
 --- a/xbmc/cores/VideoPlayer/VideoRenderers/LinuxRendererGL.cpp
 +++ b/xbmc/cores/VideoPlayer/VideoRenderers/LinuxRendererGL.cpp
 @@ -317,8 +317,21 @@ void CLinuxRendererGL::AddVideoPicture(const VideoPicture &picture, int index)
@@ -238,7 +241,7 @@ index 3be87a6254132544521e4463aed7f32e5ef03b15..5d176f75dddc2360b541d42a570c2ed8
  
  void CLinuxRendererGL::ReleaseBuffer(int idx)
 diff --git a/xbmc/cores/VideoPlayer/VideoRenderers/LinuxRendererGL.h b/xbmc/cores/VideoPlayer/VideoRenderers/LinuxRendererGL.h
-index c051e7a94f3a9476ad7a99ccc4cfae7e45dce54c..00c51329abfd523ad0e855ed1c6c881f50c16129 100644
+index c051e7a94f..00c51329ab 100644
 --- a/xbmc/cores/VideoPlayer/VideoRenderers/LinuxRendererGL.h
 +++ b/xbmc/cores/VideoPlayer/VideoRenderers/LinuxRendererGL.h
 @@ -74,6 +74,8 @@ public:
@@ -251,7 +254,7 @@ index c051e7a94f3a9476ad7a99ccc4cfae7e45dce54c..00c51329abfd523ad0e855ed1c6c881f
    // Feature support
    bool SupportsMultiPassRendering() override;
 diff --git a/xbmc/cores/VideoPlayer/VideoRenderers/LinuxRendererGLES.cpp b/xbmc/cores/VideoPlayer/VideoRenderers/LinuxRendererGLES.cpp
-index 2762bc361daf2a5d8fdf4609068797541e2a5db5..f7cc2055839190f4845fae39a28367e110687d89 100644
+index 7d557b6e1b..9c0dadc40f 100644
 --- a/xbmc/cores/VideoPlayer/VideoRenderers/LinuxRendererGLES.cpp
 +++ b/xbmc/cores/VideoPlayer/VideoRenderers/LinuxRendererGLES.cpp
 @@ -260,10 +260,21 @@ void CLinuxRendererGLES::AddVideoPicture(const VideoPicture &picture, int index)
@@ -281,7 +284,7 @@ index 2762bc361daf2a5d8fdf4609068797541e2a5db5..f7cc2055839190f4845fae39a28367e1
  
  void CLinuxRendererGLES::ReleaseBuffer(int idx)
 diff --git a/xbmc/cores/VideoPlayer/VideoRenderers/LinuxRendererGLES.h b/xbmc/cores/VideoPlayer/VideoRenderers/LinuxRendererGLES.h
-index f719b5a69ca443895c67b995b2ca12110226ea99..61ae9fcd3e932f4fe55c5d2e41360e701942d56c 100644
+index f719b5a69c..61ae9fcd3e 100644
 --- a/xbmc/cores/VideoPlayer/VideoRenderers/LinuxRendererGLES.h
 +++ b/xbmc/cores/VideoPlayer/VideoRenderers/LinuxRendererGLES.h
 @@ -78,6 +78,8 @@ public:
@@ -294,24 +297,25 @@ index f719b5a69ca443895c67b995b2ca12110226ea99..61ae9fcd3e932f4fe55c5d2e41360e70
    // Feature support
    bool SupportsMultiPassRendering() override;
 diff --git a/xbmc/cores/VideoPlayer/VideoRenderers/RenderManager.cpp b/xbmc/cores/VideoPlayer/VideoRenderers/RenderManager.cpp
-index 1a09b5a7dc020135b10dc783332a8542316683f8..ade915dcf7f66ba58033e1c6e3e9f493b1564047 100644
+index deb0f7bf5f..eef6392945 100644
 --- a/xbmc/cores/VideoPlayer/VideoRenderers/RenderManager.cpp
 +++ b/xbmc/cores/VideoPlayer/VideoRenderers/RenderManager.cpp
-@@ -96,9 +96,45 @@ bool CRenderManager::Configure(const VideoPicture& picture, float fps, unsigned
+@@ -96,9 +96,46 @@ bool CRenderManager::Configure(const VideoPicture& picture, float fps, unsigned
      if (!m_bRenderGUI)
        return true;
  
 -    if (m_pRenderer != nullptr && m_picture.IsSameParams(picture) && m_orientation == orientation &&
 -        m_NumberBuffers == buffers && !m_pRenderer->ConfigChanged(picture))
-+    if (m_pRenderer != nullptr &&
-+        m_picture.IsSameParams(picture, m_pRenderer->SupportsLiveHDRMetadata()) &&
++    const bool liveHDRMetadata = m_pRenderer != nullptr && m_pRenderer->SupportsLiveHDRMetadata();
++
++    if (m_pRenderer != nullptr && m_picture.IsSameParams(picture, liveHDRMetadata) &&
 +        m_orientation == orientation && m_NumberBuffers == buffers &&
 +        !m_pRenderer->ConfigChanged(picture))
      {
 +      // HDR light metadata is deliberately not part of IsSameParams(): a change must never
-+      // force a reconfigure, but the renderer may push it live. The mastering display content
-+      // only gets here for renderers that support pushing it live, others reconfigure above.
-+      if (!m_picture.CompareLightMetadata(picture))
++      // force a reconfigure, but the renderer may push it live.
++      if (liveHDRMetadata && (!m_picture.CompareLightMetadata(picture) ||
++                              !m_picture.CompareDisplayMetadata(picture, false)))
 +      {
 +        if (m_picture.hasDisplayMetadata && picture.hasDisplayMetadata)
 +        {
@@ -346,10 +350,10 @@ index 1a09b5a7dc020135b10dc783332a8542316683f8..ade915dcf7f66ba58033e1c6e3e9f493
        {
          CLog::Log(LOGDEBUG, "CRenderManager::Configure - framerate changed from {:4.2f} to {:4.2f}",
 diff --git a/xbmc/windowing/WinSystem.h b/xbmc/windowing/WinSystem.h
-index ebd9ef130fbe3e919adcc775d05c57f4b347a97e..353bbd0f100e8bd9bede21b7994251352ff6ee52 100644
+index 824cb05a31..b550020611 100644
 --- a/xbmc/windowing/WinSystem.h
 +++ b/xbmc/windowing/WinSystem.h
-@@ -244,6 +244,13 @@ public:
+@@ -254,6 +254,13 @@ public:
     *
     */
    virtual bool SetHDR(const VideoPicture* videoPicture) { return false; }
@@ -364,10 +368,10 @@ index ebd9ef130fbe3e919adcc775d05c57f4b347a97e..353bbd0f100e8bd9bede21b799425135
    virtual bool IsHDRDisplay() { return false; }
    virtual HDR_STATUS ToggleHDR() { return HDR_STATUS::HDR_UNSUPPORTED; }
 diff --git a/xbmc/windowing/gbm/WinSystemGbm.cpp b/xbmc/windowing/gbm/WinSystemGbm.cpp
-index 644fd4b30bc289d0e08304e7fe5ccad343f5680d..c590391368e43f3b8fa701e91ef9f098816911f3 100644
+index a7e5a11f9d..e7465e941f 100644
 --- a/xbmc/windowing/gbm/WinSystemGbm.cpp
 +++ b/xbmc/windowing/gbm/WinSystemGbm.cpp
-@@ -91,6 +91,80 @@ constexpr auto ColorimetryMap = make_map<KODI::UTILS::Colorimetry, std::string_v
+@@ -97,6 +97,80 @@ constexpr auto ColorimetryMap = make_map<KODI::UTILS::Colorimetry, std::string_v
      {KODI::UTILS::Colorimetry::ST2113_RGB, "Default"},
      {KODI::UTILS::Colorimetry::ICTCP, "Default"},
  });
@@ -448,7 +452,7 @@ index 644fd4b30bc289d0e08304e7fe5ccad343f5680d..c590391368e43f3b8fa701e91ef9f098
  } // namespace
  
  CWinSystemGbm::CWinSystemGbm()
-@@ -526,7 +600,7 @@ bool CWinSystemGbm::SetHDR(const VideoPicture* videoPicture)
+@@ -728,7 +802,7 @@ bool CWinSystemGbm::SetHDR(const VideoPicture* videoPicture)
        drm->AddProperty(connector, "HDR_OUTPUT_METADATA", 0);
        drm->SetActive(true);
  
@@ -457,7 +461,7 @@ index 644fd4b30bc289d0e08304e7fe5ccad343f5680d..c590391368e43f3b8fa701e91ef9f098
      }
  
      m_eotf = KODI::UTILS::Eotf::TRADITIONAL_SDR;
-@@ -547,82 +621,88 @@ bool CWinSystemGbm::SetHDR(const VideoPicture* videoPicture)
+@@ -749,82 +823,88 @@ bool CWinSystemGbm::SetHDR(const VideoPicture* videoPicture)
    if (connector->SupportsProperty("HDR_OUTPUT_METADATA") && m_info &&
        m_info->SupportsHDRStaticMetadataType1() && m_info->SupportsEOTF(eotf))
    {
@@ -615,18 +619,18 @@ index 644fd4b30bc289d0e08304e7fe5ccad343f5680d..c590391368e43f3b8fa701e91ef9f098
  
  bool CWinSystemGbm::IsHDRDisplay()
 diff --git a/xbmc/windowing/gbm/WinSystemGbm.h b/xbmc/windowing/gbm/WinSystemGbm.h
-index 2105a767169f35bc6d07799aabfa751d5da9bc3c..29f5b2a4d8cce225a5da8040e01428402b23b3e5 100644
+index 4d71dbda85..19eb8e8019 100644
 --- a/xbmc/windowing/gbm/WinSystemGbm.h
 +++ b/xbmc/windowing/gbm/WinSystemGbm.h
-@@ -18,6 +18,7 @@
- 
+@@ -21,6 +21,7 @@
  #include "platform/linux/input/LibInputHandler.h"
  
+ #include <atomic>
 +#include <memory>
  #include <utility>
  
  #include <gbm.h>
-@@ -67,6 +68,8 @@ public:
+@@ -79,6 +80,8 @@ public:
    KODI::UTILS::Colorimetry GetColorimetry() const override { return m_colorimetry; }
    KODI::UTILS::Eotf GetEotf() const override { return m_eotf; }
    bool SetHDR(const VideoPicture* videoPicture) override;
@@ -635,17 +639,17 @@ index 2105a767169f35bc6d07799aabfa751d5da9bc3c..29f5b2a4d8cce225a5da8040e0142840
    bool IsHDRDisplay() override;
    CHDRCapabilities GetDisplayHDRCapabilities() const override;
  
-@@ -100,7 +103,7 @@ protected:
-   std::unique_ptr<CLibInputHandler> m_libinput;
+@@ -138,7 +141,7 @@ private:
+   uint64_t m_broadcastRangeTarget{0};
+   int m_broadcastRangeRetries{0};
  
- private:
 -  CDRMPropertyBlob m_hdrBlob;
 +  std::shared_ptr<CDRMPropertyBlob> m_hdrBlob;
    KODI::UTILS::Eotf m_eotf = KODI::UTILS::Eotf::TRADITIONAL_SDR;
    KODI::UTILS::Colorimetry m_colorimetry = KODI::UTILS::Colorimetry::DEFAULT;
  
 diff --git a/xbmc/windowing/gbm/drm/DRMAtomic.cpp b/xbmc/windowing/gbm/drm/DRMAtomic.cpp
-index 7a6f87c2db3e498e60a0a39c64b81adb4247ba1d..67179881f544a5c1a473f94ad73ac94c64ce9d83 100644
+index 7a6f87c2db..67179881f5 100644
 --- a/xbmc/windowing/gbm/drm/DRMAtomic.cpp
 +++ b/xbmc/windowing/gbm/drm/DRMAtomic.cpp
 @@ -18,6 +18,7 @@
@@ -710,7 +714,7 @@ index 7a6f87c2db3e498e60a0a39c64b81adb4247ba1d..67179881f544a5c1a473f94ad73ac94c
  {
  }
 diff --git a/xbmc/windowing/gbm/drm/DRMAtomic.h b/xbmc/windowing/gbm/drm/DRMAtomic.h
-index c20531b682e1e154374c0eac5747bad692117816..4f2ad066d1f08d6e448a05b661791558f9131392 100644
+index 9a00b4f8cd..42526ea947 100644
 --- a/xbmc/windowing/gbm/drm/DRMAtomic.h
 +++ b/xbmc/windowing/gbm/drm/DRMAtomic.h
 @@ -9,12 +9,14 @@
@@ -728,7 +732,7 @@ index c20531b682e1e154374c0eac5747bad692117816..4f2ad066d1f08d6e448a05b661791558
  
  namespace KODI
  {
-@@ -35,6 +37,14 @@ public:
+@@ -36,6 +38,14 @@ public:
    void DestroyDrm() override;
    bool SupportsFencing() override { return true; }
    bool AddProperty(CDRMObject* object, const char* name, uint64_t value);
@@ -743,7 +747,7 @@ index c20531b682e1e154374c0eac5747bad692117816..4f2ad066d1f08d6e448a05b661791558
  
    // Probe whether any DRM device supports atomic modesetting, with no
    // connector required. Used to decide atomic-vs-legacy before falling back.
-@@ -56,6 +66,7 @@ private:
+@@ -57,6 +67,7 @@ private:
      drmModeAtomicReqPtr Get() const { return m_atomicRequest.get(); }
  
      bool AddProperty(CDRMObject* object, const char* name, uint64_t value);
@@ -751,7 +755,7 @@ index c20531b682e1e154374c0eac5747bad692117816..4f2ad066d1f08d6e448a05b661791558
      void CacheProperties();
      void LogAtomicRequest();
  
-@@ -66,6 +77,8 @@ private:
+@@ -67,6 +78,8 @@ private:
          uint8_t logLevel, std::map<CDRMObject*, std::map<uint32_t, uint64_t>>& atomicRequestItems);
  
      std::map<CDRMObject*, std::map<uint32_t, uint64_t>> m_atomicRequestItems;
@@ -760,7 +764,7 @@ index c20531b682e1e154374c0eac5747bad692117816..4f2ad066d1f08d6e448a05b661791558
  
      struct DrmModeAtomicReqDeleter
      {
-@@ -76,6 +89,9 @@ private:
+@@ -77,6 +90,9 @@ private:
    };
  
    CDRMAtomicRequest* m_req = nullptr;
